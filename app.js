@@ -2,7 +2,21 @@ const $ = (id) => document.getElementById(id);
 const MAX_RAW = 2.6 * 1024 * 1024;
 const TOKEN_KEY = 'oneclick-deployer-tokens-v1';
 const HISTORY_KEY = 'oneclick-deployer-history-v1';
-const APP_VERSION = '1.6.9';
+const APP_VERSION = '1.7.3';
+const PREF_KEY='oneclick-v17-app-preferences';
+let appPrefs={};
+try{appPrefs=JSON.parse(localStorage.getItem(PREF_KEY)||'{}')||{}}catch{}
+function pref(id){return appPrefs[id]||{}}
+function savePref(id,patch){appPrefs[id]={...pref(id),...patch};localStorage.setItem(PREF_KEY,JSON.stringify(appPrefs));renderHistory();}
+function productionUrl(item){return item.productionUrl||item.url||'';}
+function safeDate(v){if(!v)return '확인 필요';const d=new Date(v);return isNaN(d)?'확인 필요':d.toLocaleString('ko-KR');}
+const NIRC_V1={repoName:'nirc_light_app_center_v1',projectId:'prj_bEnjumDSlVt3j9uMlDCmp1lzm2Mj',teamId:'team_JascJq2O5XRI8RO2mr4NDmSF',productionUrl:'https://nirclightappcenterv1.vercel.app/'};
+function projectUrl(p){const a=[...(p.targets?.production?.alias||[]),...(p.alias||[])].map(x=>typeof x==='string'?x:x?.domain).filter(Boolean);const d=a.find(x=>x==='nirclightappcenterv1.vercel.app')||a.find(x=>x.endsWith('.vercel.app'))||a[0];return d?'https://'+d.replace(/^https?:\/\//,'')+'/':'';}
+function upsertProject(p,teamId){let item=historyItems.find(x=>x.projectId===p.id)||historyItems.find(x=>x.repoName===p.name);if(!item){item={repoName:p.name};historyItems.push(item)}item.repoName=p.name;item.projectId=p.id;item.teamId=teamId||item.teamId||'';item.productionUrl=projectUrl(p)||item.productionUrl||'';item.lastDeployAt=p.targets?.production?.createdAt||p.updatedAt||item.lastDeployAt||null;return item;}
+async function fetchVercelProject(id,teamId){const token=$('vercelToken').value.trim();if(!token)throw Error('Vercel 토큰을 입력하세요.');const u=new URL('https://api.vercel.com/v9/projects/'+encodeURIComponent(id));if(teamId)u.searchParams.set('teamId',teamId);const r=await fetch(u,{headers:{Authorization:'Bearer '+token}});if(!r.ok)throw Error('프로젝트 조회 실패 ('+r.status+'). 팀 권한과 ID를 확인하세요.');return r.json();}
+async function lookupProjectId(id,teamId){const p=await fetchVercelProject(id,teamId);if(p.id!==id)throw Error('조회된 프로젝트 ID가 입력값과 다릅니다.');const item=upsertProject(p,teamId);if(!item.productionUrl)throw Error('Production URL을 확인하지 못했습니다. Vercel 도메인을 먼저 확인하세요.');localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));renderHistory();$('historySelect').value=item.repoName;applyHistoryTarget(item);$('projectLookupStatus').textContent='확인 완료: '+p.name+' · '+item.productionUrl;return item;}
+async function enrichProjects(){const token=$('vercelToken').value.trim();if(!token)return;const status=$('projectLookupStatus');try{const teamIds=['',NIRC_V1.teamId];let count=0;for(const teamId of teamIds){let next=null;const seen=new Set();for(let i=0;i<100;i++){const u=new URL('https://api.vercel.com/v9/projects');u.searchParams.set('limit','100');if(teamId)u.searchParams.set('teamId',teamId);if(next)u.searchParams.set('until',next);const r=await fetch(u,{headers:{Authorization:'Bearer '+token}});if(!r.ok){if(teamId){status.textContent='팀 프로젝트 목록 권한 확인 필요 ('+r.status+'). ID 직접 조회를 이용하세요.';break;}throw Error('프로젝트 조회 실패 '+r.status)}const d=await r.json();for(const project of d.projects||[]){upsertProject(project,teamId);count++}const cursor=d.pagination?.next;if(!cursor||seen.has(String(cursor)))break;seen.add(String(cursor));next=cursor;}}localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));renderHistory();status.textContent='조회 완료: '+count+'개 (중복 포함). 누락된 프로젝트는 ID 직접 조회를 이용하세요.';}catch(e){status.textContent='Vercel 목록 조회 실패: '+e.message;}}
+
 let packedFiles = [];
 let historyItems = [];
 let busy = false;
@@ -92,7 +106,7 @@ function zipIdentity(){
     return {
       repoName:slugify(manifest.repoName),
       appName:String(manifest.appName||manifest.repoName),
-      appId:String(manifest.appId||''),
+      appId:'',
       source:'oneclick manifest'
     };
   }
@@ -351,18 +365,29 @@ function loadSaved(){
 updateReady();
 }
 function renderHistory(){
-  const sel=$('historySelect');
-  if(!sel)return;
+  const sel=$('historySelect');if(!sel)return;
   const prev=sel.value;
+  const sorted=[...historyItems].filter(x=>x?.repoName).sort((a,b)=>{
+    const f=Number(!!pref(b.repoName).favorite)-Number(!!pref(a.repoName).favorite);
+    if(f)return f;
+    return (Date.parse(pref(b.repoName).usedAt||b.at||0)||0)-(Date.parse(pref(a.repoName).usedAt||a.at||0)||0);
+  });
   sel.innerHTML='<option value="">자동 찾기 / 새 앱</option>';
-  for(const item of historyItems){
-    if(!item?.repoName)continue;
-    const o=document.createElement('option');
-    o.value=item.repoName;
-    o.textContent=`${item.appName||item.repoName} · ${item.repoName}`;
-    sel.appendChild(o);
+  for(const item of sorted){const o=document.createElement('option');o.value=item.repoName;o.textContent=`${pref(item.repoName).favorite?'★ ':''}${pref(item.repoName).alias||item.appName||'이름 미확인'} · ${item.repoName}`;sel.appendChild(o)}
+  if(sorted.some(x=>x.repoName===prev))sel.value=prev;
+  const cards=$('appCards');if(!cards)return;cards.replaceChildren();
+  for(const item of sorted){const id=item.repoName;const box=document.createElement('div');box.className='app-choice';
+    const title=document.createElement('strong');title.textContent=(pref(id).favorite?'★ ':'')+(pref(id).alias||item.appName||'이름 미확인');box.append(title);
+    const info=document.createElement('div');info.className='mini';info.textContent=`프로젝트: ${id}\nProduction: ${productionUrl(item)||'확인 필요'}\n최근 배포: ${safeDate(item.lastDeployAt||item.at)}`;box.append(info);
+    const row=document.createElement('div');row.className='app-actions';
+    const button=(label,fn)=>{const b=document.createElement('button');b.type='button';b.className='btn';b.textContent=label;b.addEventListener('click',fn);row.append(b)};
+    button('선택',()=>{sel.value=id;sel.dispatchEvent(new Event('change'))});
+    button(pref(id).favorite?'★ 해제':'☆ 즐겨찾기',()=>savePref(id,{favorite:!pref(id).favorite}));
+    button('별칭',()=>{const v=prompt('앱 별칭 입력 (빈칸은 별칭 삭제)',pref(id).alias||'');if(v!==null)savePref(id,{alias:v.trim().slice(0,80)})});
+    button('주소 복사',async()=>{if(!productionUrl(item))return alert('Production URL 확인이 필요합니다.');try{await navigator.clipboard.writeText(productionUrl(item));alert('주소를 복사했습니다.')}catch{prompt('주소를 복사하세요',productionUrl(item))}});
+    button('앱 열기',()=>{if(productionUrl(item))window.open(productionUrl(item),'_blank','noopener,noreferrer');else alert('Production URL 확인이 필요합니다.')});
+    box.append(row);cards.append(box);
   }
-  if(historyItems.some(x=>x.repoName===prev))sel.value=prev;
 }
 function selectedHistoryItem(){
   const v=$('historySelect')?.value||'';
@@ -377,9 +402,9 @@ function setExistingTargetLock(repoName, source='기존 앱'){
   $('mode').value='update';
   $('mode').disabled=true;
   const note=$('repoLockNote');
-  if(note)note.textContent=`🔒 주소 고정: https://${target}.vercel.app · ZIP 이름이 바뀌어도 이 주소로 업데이트`;
+  if(note)note.textContent='🔒 기존 프로젝트 잠금 · ZIP 이름과 관계없이 선택한 프로젝트 ID로 업데이트';
   const addr=$('lockedAddress');
-  if(addr){addr.textContent=`https://${target}.vercel.app`;addr.classList.remove('hidden');}
+  if(addr){const item=historyItems.find(x=>x.repoName===target);addr.textContent=productionUrl(item)||'Production URL 확인 필요';addr.classList.remove('hidden');}
 }
 function clearExistingTargetLock(){
   $('repoName').readOnly=false;
@@ -393,6 +418,7 @@ function applyHistoryTarget(item){
   $('repoName').value=item.repoName;
   if(item.appName)$('appName').value=item.appName;
   selectedAppId=item.appId||'';
+  savePref(item.repoName,{usedAt:new Date().toISOString()});
   resolvedTargetName=item.repoName;
   resolvedTargetSource='기존 앱 빠른 선택';
   autoDetectionOk=true;
@@ -491,8 +517,16 @@ async function deploy(){
   let completed=false;
   let completedText='배포 완료';
   if($('deployBtn').disabled||busy)return;busy=true;updateReady();$('deployError').classList.add('hidden');$('deployResult').classList.add('hidden');$('launchBtn').classList.add('hidden');$('launchBtn').removeAttribute('href');setProgress(10,'GitHub 저장 시작');
+  const chosen=selectedHistoryItem();
+  if($('mode').value==='update'){
+    if(!chosen||!chosen.projectId||!productionUrl(chosen)){busy=false;updateReady();alert('기존 프로젝트 ID를 확인하지 못했습니다. Vercel 목록 새로고침 후 앱을 선택하세요. 새 프로젝트는 만들지 않습니다.');return;}
+    const message=`작업 유형: 기존 앱 업데이트\nZIP: ${selectedZipName}\n앱 이름: ${pref(chosen.repoName).alias||chosen.appName||'이름 미확인'}\nVercel 프로젝트: ${chosen.repoName}\n프로젝트 ID: ${chosen.projectId}\nProduction URL: ${productionUrl(chosen)||'확인 필요'}\n\n이 대상으로 업데이트하시겠습니까?`;
+    if(!confirm(message)){busy=false;updateReady();return;}
+    if(!zipMatchesTarget(selectedZipName,chosen.repoName) && !confirm('ZIP 파일명과 기존 프로젝트명이 다릅니다.\n\nZIP 내부 파일이 이 앱의 올바른 수정본인지 확인하셨습니까?\n기존 앱 파일이 교체될 수 있습니다.\n\n프로젝트 ID와 Production URL 검증은 계속 유지됩니다.')){busy=false;updateReady();return;}
+  }
+  if($('mode').value==='create'&&!confirm('⚠️ 새 앱 생성은 Vercel 프로젝트를 1개 추가합니다.\n이미 존재하는 앱의 수정이라면 취소하고 기존 앱을 선택하세요.\n\n정말 새로운 앱을 생성합니까?')){busy=false;updateReady();return;}
   const lockedRepoName=$('repoName').readOnly ? $('repoName').value.trim() : '';
-  const payload={appName:$('appName').value.trim(),repoName:$('repoName').value.trim(),visibility:$('visibility').value,mode:$('mode').value,zipName:selectedZipName,expectedAppId:selectedAppId||'',lockedRepoName,lockSource:resolvedTargetSource||'',clientVersion:APP_VERSION,githubToken:$('githubToken').value.trim(),vercelToken:$('vercelToken').value.trim(),files:packedFiles};
+  const payload={appName:$('appName').value.trim(),repoName:$('repoName').value.trim(),visibility:$('visibility').value,mode:$('mode').value,zipName:selectedZipName,expectedAppId:selectedAppId||'',lockedRepoName,expectedProjectId:chosen?.projectId||'',expectedProductionUrl:productionUrl(chosen)||'',vercelTeamId:chosen?.teamId||'',lockSource:resolvedTargetSource||'',clientVersion:APP_VERSION,githubToken:$('githubToken').value.trim(),vercelToken:$('vercelToken').value.trim(),files:packedFiles};
   try{
     const r=await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'배포 실패');
     setProgress(80,'GitHub 저장 완료 · Vercel 배포 중');let st=null;if(d.vercel.deploymentId)st=await pollVercel(payload.vercelToken,d.vercel.deploymentId);
@@ -503,7 +537,7 @@ async function deploy(){
       launch.href=finalUrl;
       launch.classList.remove('hidden');
     }
-    const item={appName:payload.appName,repoName:payload.repoName,repoUrl:d.git.repoUrl,url:finalUrl,appId:d.appId||payload.expectedAppId||'',at:new Date().toISOString()};historyItems=[item,...historyItems.filter(x=>x.repoName!==item.repoName)].slice(0,20);localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));renderHistory();$('historySelect').value=item.repoName;applyHistoryTarget(item);$('mode').value='update';saveTokens();
+    const item={...chosen,projectId:d.vercel.projectId||chosen?.projectId||'',appName:payload.appName,repoName:payload.repoName,repoUrl:d.git.repoUrl,url:finalUrl,appId:d.appId||payload.expectedAppId||'',at:new Date().toISOString()};historyItems=[item,...historyItems.filter(x=>x.repoName!==item.repoName)].slice(0,20);localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));renderHistory();$('historySelect').value=item.repoName;applyHistoryTarget(item);$('mode').value='update';saveTokens();
   }catch(e){
     if(completed){
       console.warn('배포 완료 후 UI 정리 오류:',e);
@@ -523,6 +557,95 @@ async function deploy(){
 }
 
 
+
+
+
+let cleanupItems=[];
+function protectedCleanupNames(){
+  const names=new Set();
+  const current=currentProjectName();
+  if(current)names.add(current.toLowerCase());
+  const selected=$('repoName')?.value?.trim();
+  if(selected && ($('repoName')?.readOnly || $('historySelect')?.value)) names.add(selected.toLowerCase());
+  return names;
+}
+function cleanupBadge(text,state=''){
+  const span=document.createElement('span'); span.className=`badge ${state}`.trim(); span.textContent=text; return span;
+}
+function renderCleanupList(){
+  const wrap=$('cleanupList'); if(!wrap)return;
+  wrap.innerHTML='';
+  const protectedSet=protectedCleanupNames();
+  for(const item of cleanupItems){
+    const protectedItem=protectedSet.has(String(item.name||'').toLowerCase());
+    const row=document.createElement('label');
+    row.className=`cleanup-item ${protectedItem?'protected-item':(item.duplicate||!item.pair?'warn-item':'')}`;
+    const cb=document.createElement('input'); cb.type='checkbox'; cb.className='cleanup-check'; cb.dataset.name=item.name; cb.disabled=protectedItem;
+    cb.addEventListener('change',updateCleanupDeleteReady);
+    const body=document.createElement('div');
+    const name=document.createElement('div'); name.className='cleanup-name'; name.textContent=item.name; body.appendChild(name);
+    const meta=document.createElement('div'); meta.className='cleanup-meta';
+    if(protectedItem)meta.appendChild(cleanupBadge('🔒 보호됨','ok'));
+    if(item.duplicate)meta.appendChild(cleanupBadge('중복/유사 이름 후보','warn'));
+    if(item.github)meta.appendChild(cleanupBadge('GitHub 있음','ok')); else meta.appendChild(cleanupBadge('GitHub 없음','bad'));
+    if(item.vercel)meta.appendChild(cleanupBadge('Vercel 있음','ok')); else meta.appendChild(cleanupBadge('Vercel 없음','bad'));
+    if(item.pair)meta.appendChild(cleanupBadge('양쪽 일치','ok')); else meta.appendChild(cleanupBadge('한쪽만 존재','warn'));
+    body.appendChild(meta);
+    const links=document.createElement('div'); links.className='cleanup-links';
+    if(item.githubUrl){const a=document.createElement('a');a.href=item.githubUrl;a.target='_blank';a.rel='noreferrer';a.textContent='GitHub 열기';links.appendChild(a)}
+    if(item.vercelUrl){const a=document.createElement('a');a.href=item.vercelUrl;a.target='_blank';a.rel='noreferrer';a.textContent='앱 주소 열기';links.appendChild(a)}
+    body.appendChild(links); row.appendChild(cb); row.appendChild(body); wrap.appendChild(row);
+  }
+  wrap.classList.toggle('hidden',cleanupItems.length===0);
+  $('cleanupDeleteBox').classList.toggle('hidden',cleanupItems.length===0);
+  updateCleanupDeleteReady();
+}
+function selectedCleanupTargets(){
+  return [...document.querySelectorAll('.cleanup-check:checked')].map(cb=>{
+    const item=cleanupItems.find(x=>x.name===cb.dataset.name); return item?{name:item.name,github:item.github,vercel:item.vercel}:null;
+  }).filter(Boolean);
+}
+function updateCleanupDeleteReady(){
+  const btn=$('deleteSelectedApps'); if(!btn)return;
+  const ok=selectedCleanupTargets().length>0 && $('cleanupConfirm').value.trim()==='선택 삭제'; btn.disabled=!ok;
+}
+async function scanCleanupApps(){
+  $('cleanupError').classList.add('hidden'); $('cleanupResult').classList.add('hidden');
+  const {githubToken,vercelToken}=loadSavedTokens();
+  if(!githubToken||!vercelToken){$('cleanupError').textContent='GitHub와 Vercel 토큰을 먼저 입력하세요.';$('cleanupError').classList.remove('hidden');return}
+  $('scanApps').disabled=true; $('scanApps').textContent='조회 중...';
+  try{
+    const r=await fetch('/api/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'list',githubToken,vercelToken})});
+    const d=await r.json().catch(()=>({})); if(!r.ok||!d.ok)throw new Error(d.error||'목록 조회 실패');
+    cleanupItems=Array.isArray(d.items)?d.items:[]; renderCleanupList();
+    const dup=cleanupItems.filter(x=>x.duplicate).length, orphan=cleanupItems.filter(x=>!x.pair).length;
+    $('cleanupSummary').textContent=`실제 앱 ${cleanupItems.length}개 확인 · 중복/유사 이름 후보 ${dup}개 · GitHub/Vercel 한쪽만 존재 ${orphan}개`;
+    $('cleanupSummary').classList.remove('hidden');
+  }catch(e){$('cleanupError').textContent=e.message||'목록 조회 실패';$('cleanupError').classList.remove('hidden')}
+  finally{$('scanApps').disabled=false;$('scanApps').textContent='🔎 실제 앱 목록 불러오기'}
+}
+async function deleteCleanupApps(){
+  const targets=selectedCleanupTargets(); if(!targets.length)return;
+  if(!confirm(`선택한 ${targets.length}개 앱의 GitHub/Vercel 실제 프로젝트를 삭제합니다. 계속할까요?`))return;
+  const {githubToken,vercelToken}=loadSavedTokens();
+  $('deleteSelectedApps').disabled=true; $('cleanupError').classList.add('hidden'); $('cleanupResult').classList.add('hidden');
+  try{
+    const r=await fetch('/api/cleanup',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({action:'delete',githubToken,vercelToken,targets,protectNames:[...protectedCleanupNames()],confirmText:$('cleanupConfirm').value.trim()})});
+    const d=await r.json().catch(()=>({})); if(!r.ok||!d.ok)throw new Error(d.error||'삭제 실패');
+    const ok=(d.results||[]).filter(x=>x.ok).map(x=>x.name); const fail=(d.results||[]).filter(x=>!x.ok);
+    if(ok.length){historyItems=historyItems.filter(x=>!ok.includes(x.repoName));localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));renderHistory()}
+    $('cleanupResult').innerHTML=`<b>정리 결과</b><br>삭제 완료: ${ok.length}개${fail.length?`<br>삭제 못함: ${fail.map(x=>`${x.name} (${x.error||'오류'})`).join(', ')}`:''}`;
+    $('cleanupResult').classList.remove('hidden'); $('cleanupConfirm').value=''; await scanCleanupApps();
+  }catch(e){$('cleanupError').textContent=e.message||'삭제 실패';$('cleanupError').classList.remove('hidden')}
+  finally{updateCleanupDeleteReady()}
+}
+function clearLocalHistoryOnly(){
+  if(!confirm('이 기기에 저장된 과거 앱 빠른선택 목록만 지웁니다. GitHub/Vercel 실제 앱은 삭제되지 않습니다. 계속할까요?'))return;
+  historyItems=[]; localStorage.removeItem(HISTORY_KEY); renderHistory();
+  $('historySelect').value=''; releaseHistoryTarget(); selectedAppId=''; autoDetectionOk=false; resolvedTargetName=''; resolvedTargetSource='';
+  $('cleanupResult').textContent='이 기기의 과거 앱 목록을 정리했습니다. GitHub/Vercel 실제 프로젝트는 그대로입니다.'; $('cleanupResult').classList.remove('hidden');
+  if(selectedZipName&&packedFiles.length)redetectIfNeeded(); else updateReady();
+}
 
 $('zipInput').addEventListener('change',e=>{const f=e.target.files?.[0];if(f)chooseZip(f)});
 
@@ -583,6 +706,10 @@ $('remember').addEventListener('change',()=>{if($('remember').checked)saveTokens
 $('mode').addEventListener('change',()=>{if($('mode').value==='create')selectedAppId='';updateDeployButtonLabel();updateReady()});
 $('historySelect').addEventListener('change',async()=>{const item=selectedHistoryItem(); if(item){applyHistoryTarget(item); if(selectedZipName&&packedFiles.length)await redetectIfNeeded();}else{releaseHistoryTarget(); selectedAppId=''; autoDetectionOk=false; resolvedTargetName=''; resolvedTargetSource=''; if(selectedZipName&&packedFiles.length)await redetectIfNeeded(); else updateReady();}});
 $('deployBtn').addEventListener('click',deploy);
+$('scanApps').addEventListener('click',scanCleanupApps);
+$('clearLocalHistory').addEventListener('click',clearLocalHistoryOnly);
+$('cleanupConfirm').addEventListener('input',updateCleanupDeleteReady);
+$('deleteSelectedApps').addEventListener('click',deleteCleanupApps);
 loadSaved();setProgress(0,'준비');
 
 $('githubToken').addEventListener('input',redetectIfNeeded);
@@ -590,3 +717,7 @@ $('vercelToken').addEventListener('input',redetectIfNeeded);
 $('appName').addEventListener('input',updateReady);
 updateDeployButtonLabel();
 updateReady();
+
+$('refreshProjects').addEventListener('click',enrichProjects);
+$('lookupProjectBtn').addEventListener('click',async()=>{const id=$('manualProjectId').value.trim(),team=$('manualTeamId').value.trim();if(!/^prj_[A-Za-z0-9]+$/.test(id))return alert('올바른 프로젝트 ID를 입력하세요.');try{await lookupProjectId(id,team);}catch(e){$('projectLookupStatus').textContent=e.message;alert(e.message);}});
+$('selectNircV1').addEventListener('click',async()=>{$('manualProjectId').value=NIRC_V1.projectId;$('manualTeamId').value=NIRC_V1.teamId;try{await lookupProjectId(NIRC_V1.projectId,NIRC_V1.teamId);}catch(e){$('projectLookupStatus').textContent='NIRC V1 확인 실패: '+e.message;alert('실제 Vercel 조회에 실패했습니다. 배포하지 않습니다.\n'+e.message);}});

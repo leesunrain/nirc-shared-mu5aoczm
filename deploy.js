@@ -9,6 +9,8 @@ function validate(body){
   if(!/^[a-z0-9._-]{1,80}$/.test(body.repoName))throw new Error('GitHub/Vercel 이름은 영문 소문자, 숫자, 점, 밑줄, 하이픈만 사용하세요.');
   if(!Array.isArray(body.files)||!body.files.length)throw new Error('배포할 파일이 없습니다.');
   if(body.mode==='update'){
+    if(!body.expectedProductionUrl)throw new Error('Production URL 미확인: 업데이트 차단');
+    if(!body.expectedProjectId)throw new Error('기존 Vercel projectId가 확인되지 않아 업데이트를 차단했습니다.');
     if(!body.lockedRepoName)throw new Error('안전 차단: 기존 앱 업데이트는 먼저 기존 앱을 선택해 주소를 잠가야 합니다.');
     if(body.lockedRepoName!==body.repoName)throw new Error('안전 차단: 잠긴 기존 주소와 배포 대상이 다릅니다.');
   }
@@ -38,11 +40,11 @@ async function getExistingManifest(owner,repoName,token){
 async function syncGithub(body){
   const token=body.githubToken;const user=await gh(`${GH_API}/user`,token);if(!user.r.ok)throw new Error(`GitHub 인증 실패: ${user.d.message||user.r.status}`);const owner=user.d.login;
   let repo=await gh(`${GH_API}/repos/${encodeURIComponent(owner)}/${encodeURIComponent(body.repoName)}`,token);let created=false;
-  // 기존 앱 빠른 선택으로 appId가 전달된 경우에는 ZIP 파일명보다 앱 고유 ID를 우선 검증한다.
-  // appId가 없는 구버전 업데이트만 파일명 일치 규칙을 유지한다.
-  if(body.mode==='update' && !body.expectedAppId && !zipMatchesTargetServer(body.zipName,body.repoName)){
-    throw new Error(`안전 차단: 선택한 ZIP '${body.zipName||'없음'}'은 대상 앱 '${body.repoName}'용 파일이 아닙니다. 기존 앱 빠른 선택을 사용하면 파일명이 달라도 안전 업데이트할 수 있습니다.`);
-  }
+  // v1.7.3: ZIP 파일명은 앱 식별자가 아닙니다. 업데이트는 사전에
+  // Vercel projectId + 프로젝트명 + Production URL을 API로 확인하고,
+  // 기존 GitHub 저장소와 앱 안전정보를 검사한 후에만 허용합니다.
+  // verifyVercelTarget()은 syncGithub() 전에 반드시 실행됩니다.
+  // 신규 앱 모드의 생성/중복 방지 규칙은 변경하지 않습니다.
   if(repo.r.status===404){
     if(body.mode==='update')throw new Error(`안전 차단: 기존 GitHub 저장소 '${body.repoName}'가 없어 업데이트할 수 없습니다.`);
     repo=await gh(`${GH_API}/user/repos`,token,{method:'POST',body:JSON.stringify({name:body.repoName,description:'원클릭 앱 배포기로 관리되는 저장소',private:body.visibility!=='public',auto_init:true})});
@@ -77,14 +79,39 @@ async function syncGithub(body){
   const ur=await gh(`${GH_API}/repos/${owner}/${body.repoName}/git/refs/heads/${encodeURIComponent(branch)}`,token,{method:'PATCH',body:JSON.stringify({sha:nc.d.sha,force:false})});if(!ur.r.ok)throw new Error(`GitHub 브랜치 업데이트 실패: ${ur.d.message||ur.r.status}`);
   return{owner,repoUrl:`https://github.com/${owner}/${body.repoName}`,commitSha:nc.d.sha,branch,appId};
 }
+async function verifyVercelTarget(body){
+  const headers={Authorization:`Bearer ${body.vercelToken}`};
+  const key=body.mode==='update'?body.expectedProjectId:body.repoName;
+  const u=new URL(`https://api.vercel.com/v9/projects/${encodeURIComponent(key)}`);if(body.vercelTeamId)u.searchParams.set('teamId',body.vercelTeamId);const r=await fetch(u,{headers});
+  if(body.mode==='update'){
+    if(!r.ok)throw new Error('기존 Vercel 프로젝트 ID를 찾지 못했습니다. GitHub 변경 없이 중단합니다.');
+    const p=await r.json();
+    if(p.id!==body.expectedProjectId||p.name!==body.repoName)throw new Error('기존 Vercel 프로젝트 이름/ID 불일치: 배포 중단');
+    const aliases=[...(p.targets?.production?.alias||[]),...(p.alias||[])].map(x=>typeof x==='string'?x:x?.domain).filter(Boolean);const expected=new URL(body.expectedProductionUrl).hostname;if(!aliases.includes(expected))throw new Error('Production URL이 실제 프로젝트 도메인 목록과 일치하지 않아 배포를 중단했습니다.');return p;
+  }
+  if(r.ok)throw new Error('이미 존재하는 Vercel 프로젝트입니다. 반드시 기존 앱 업데이트를 선택하세요.');
+  if(r.status!==404)throw new Error(`Vercel 프로젝트 사전확인 실패 (${r.status})`);
+  // 무료 플랜 한도에 걸리면 GitHub 커밋 이전에 중단한다.
+  const list=await fetch('https://api.vercel.com/v9/projects?limit=1',{headers});
+  if(list.ok){const data=await list.json();const count=data.pagination?.count;
+    if(typeof count==='number'&&count>=200)throw new Error('Vercel Hobby 프로젝트 200개 한도입니다. 새 앱 생성 불가. 기존 앱 업데이트를 선택하거나 미사용 프로젝트를 정리하세요.');
+  }
+  return null;
+}
 async function deployVercel(body){
-  const check=await fetch(`https://api.vercel.com/v9/projects/${encodeURIComponent(body.repoName)}`,{headers:{Authorization:`Bearer ${body.vercelToken}`}});
-  if(check.ok&&body.mode==='create')throw new Error(`안전 차단: Vercel 프로젝트 '${body.repoName}'가 이미 있습니다. 새 앱으로 덮어쓸 수 없습니다.`);
-  if(check.status===404&&body.mode==='update')throw new Error(`안전 차단: Vercel 프로젝트 '${body.repoName}'가 없어 업데이트할 수 없습니다.`);
-  if(!check.ok&&check.status!==404){const cd=await check.json().catch(()=>({}));throw new Error(`Vercel 프로젝트 확인 실패: ${cd?.error?.message||check.status}`)}
-  const r=await fetch('https://api.vercel.com/v13/deployments?skipAutoDetectionConfirmation=1',{method:'POST',headers:{Authorization:`Bearer ${body.vercelToken}`,'Content-Type':'application/json'},body:JSON.stringify({name:body.repoName,project:body.repoName,target:'production',files:body.files.map(f=>({file:f.path,data:f.data,encoding:'base64'}))})});const d=await r.json();if(!r.ok)throw new Error(`Vercel 배포 실패: ${d?.error?.message||r.status}`);return{deploymentId:d.id,state:d.readyState||d.state||'BUILDING',url:d.url?`https://${d.url}`:''};
+  const endpoint=new URL('https://api.vercel.com/v13/deployments');endpoint.searchParams.set('skipAutoDetectionConfirmation','1');if(body.vercelTeamId)endpoint.searchParams.set('teamId',body.vercelTeamId);const r=await fetch(endpoint,{method:'POST',headers:{Authorization:`Bearer ${body.vercelToken}`,'Content-Type':'application/json'},body:JSON.stringify({name:body.repoName,project:body.mode==='update'?body.expectedProjectId:body.repoName,target:'production',files:body.files.map(f=>({file:f.path,data:f.data,encoding:'base64'}))})});
+  const d=await r.json();
+  if(!r.ok){const message=d?.error?.message||String(r.status);throw new Error(message.includes('200 project')?'Vercel 프로젝트 200개 한도입니다. 기존 앱 업데이트를 선택하세요.':`Vercel 배포 실패: ${message}`)}
+  return{deploymentId:d.id,state:d.readyState||d.state||'BUILDING',url:d.url?`https://${d.url}`:'',projectId:body.mode==='update'?body.expectedProjectId:(d.projectId||'')};
 }
 export default async function handler(req,res){
   if(req.method!=='POST')return res.status(405).json({ok:false,error:'POST만 지원합니다.'});
-  try{const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{};validate(body);const git=await syncGithub(body);const vercel=await deployVercel(body);return res.json({ok:true,appId:git.appId,git,vercel})}catch(e){return res.status(400).json({ok:false,error:e?.message||'배포 중 오류가 발생했습니다.'})}
+  try{
+    const body=typeof req.body==='string'?JSON.parse(req.body):req.body||{};
+    validate(body);
+    await verifyVercelTarget(body); // GitHub 수정 전에 프로젝트 존재/ID 확인
+    const git=await syncGithub(body);
+    const vercel=await deployVercel(body);
+    return res.json({ok:true,appId:git.appId,git,vercel});
+  }catch(e){return res.status(400).json({ok:false,error:e?.message||'배포 중 오류가 발생했습니다.'})}
 }

@@ -53,6 +53,7 @@
     <div id="historyWrap">
       <label class="label" for="historySelect">기존 앱 빠른 선택</label>
       <select class="select" id="historySelect"><option value="">자동 찾기 / 새 앱</option></select>
+      <div class="note" style="margin:10px 0"><strong>프로젝트 ID로 기존 앱 찾기</strong><p class="muted mini">목록에 없어도 Vercel에서 실제 조회 후 업데이트합니다. 확인 실패 시 배포가 차단됩니다.</p><input class="input" id="manualProjectId" placeholder="prj_... (Vercel 프로젝트 ID)" autocomplete="off"><input class="input" id="manualTeamId" placeholder="team_... (팀 ID, 선택)" autocomplete="off" style="margin-top:6px"><div class="app-actions" style="margin-top:8px"><button type="button" class="btn" id="lookupProjectBtn">프로젝트 ID 조회·선택</button><button type="button" class="btn" id="selectNircV1">NIRC 앱센터 V1 확인·선택</button></div></div><button type="button" class="btn" id="refreshProjects">Vercel 실제 목록 새로고침</button><p class="muted mini" id="projectLookupStatus">실제 프로젝트 ID 확인 후 기존 앱을 업데이트합니다.</p><div id="appCards" class="app-cards"></div>
       <p class="muted mini">수정 앱은 반드시 여기서 기존 앱을 먼저 선택하세요. 선택 즉시 GitHub/Vercel 이름과 주소가 잠깁니다. 이후 ZIP 파일명이 v2·FINAL·수정본처럼 달라도 같은 주소로만 업데이트됩니다.</p>
       <div class="readonly-box" id="autoDecision">ZIP을 선택하세요</div>
 <div class="readonly-box muted-box" id="detectDetail">GitHub: 대기 · Vercel: 대기</div>
@@ -87,8 +88,28 @@
     <div class="result hidden" id="deployResult"><h3 id="resultTitle">✅ 배포 완료</h3><div class="kv"><b>GitHub</b><a class="link" id="repoLink" target="_blank" rel="noreferrer"></a><b>Vercel</b><a class="link" id="vercelLink" target="_blank" rel="noreferrer"></a><b>상태</b><span id="vercelState"></span><b>Commit</b><span class="secret" id="commitSha"></span></div><a class="btn big spacer launch-btn hidden" id="launchBtn" target="_blank" rel="noreferrer">🚀 앱 바로 실행</a></div>
   </section>
 
+
+  <section class="card spacer" id="cleanupCard">
+    <h2>4. 앱 정리 관리</h2>
+    <p class="muted">GitHub 저장소와 Vercel 프로젝트를 실제로 조회해 중복·구버전·한쪽만 남은 앱을 정리합니다. 현재 배포기와 선택 중인 대표 앱은 자동 보호됩니다.</p>
+    <div class="small-actions cleanup-actions">
+      <button class="btn secondary" id="scanApps">🔎 실제 앱 목록 불러오기</button>
+      <button class="btn secondary" id="clearLocalHistory">🧹 이 기기 과거 목록만 정리</button>
+    </div>
+    <div class="readonly-box muted-box hidden" id="cleanupSummary"></div>
+    <div id="cleanupList" class="cleanup-list hidden"></div>
+    <div id="cleanupDeleteBox" class="cleanup-delete hidden">
+      <div class="note danger-note"><b>주의:</b> 아래 삭제는 브라우저 목록이 아니라 GitHub 저장소/Vercel 프로젝트 자체를 삭제합니다. 복구가 어려울 수 있습니다.</div>
+      <label class="label" for="cleanupConfirm">선택한 앱을 실제 삭제하려면 <b>선택 삭제</b>라고 입력</label>
+      <input class="input" id="cleanupConfirm" placeholder="선택 삭제">
+      <button class="btn danger spacer-sm" id="deleteSelectedApps" disabled>🗑️ 선택한 구버전/중복 앱 실제 삭제</button>
+    </div>
+    <div class="result hidden" id="cleanupResult"></div>
+    <div class="result error hidden" id="cleanupError"></div>
+  </section>
+
   <section class="card spacer"><h2>사용 순서</h2><div class="muted"><b>처음 한 번:</b> GitHub 토큰과 Vercel 토큰 입력 → 연결 확인<br><b>새 앱:</b> ChatGPT가 만든 ZIP 선택 → 앱 이름 확인 → 자동 배포<br><b>수정:</b> 기존 앱 선택(주소 잠금) → 수정 ZIP 선택 → 자동 업데이트</div><div class="note">비밀번호 자체는 입력하지 않습니다. GitHub/Vercel에서 발급한 토큰만 사용합니다. 토큰이 유출되었다고 의심되면 해당 서비스에서 즉시 폐기하세요.</div></section>
-  <div class="footer">OneClick App Deployer v1.6.9 ADDRESS LOCK+ · GitHub + Vercel 자동화 · Supabase 자동 스키마 연결은 다음 단계</div>
+  <div class="footer">OneClick App Deployer v1.7.3 CLEANUP + ADDRESS LOCK+ · GitHub + Vercel 자동화 · Supabase 자동 스키마 연결은 다음 단계</div>
 </main>
 <script type="module" src="/app.js"></script>
 </body>
