@@ -2,13 +2,13 @@ const $ = (id) => document.getElementById(id);
 const MAX_RAW = 2.6 * 1024 * 1024;
 const TOKEN_KEY = 'oneclick-deployer-tokens-v1';
 const HISTORY_KEY = 'oneclick-deployer-history-v1';
-const APP_VERSION = '1.7.5';
+const APP_VERSION = '1.7.7';
 const PREF_KEY='oneclick-v17-app-preferences';
 let appPrefs={};
 try{appPrefs=JSON.parse(localStorage.getItem(PREF_KEY)||'{}')||{}}catch{}
 function pref(id){return appPrefs[id]||{}}
 function savePref(id,patch){appPrefs[id]={...pref(id),...patch};localStorage.setItem(PREF_KEY,JSON.stringify(appPrefs));renderHistory();}
-function productionUrl(item){return item.productionUrl||item.url||'';}
+function productionUrl(item){return item?.productionUrl||item?.url||'';}
 function safeDate(v){if(!v)return '확인 필요';const d=new Date(v);return isNaN(d)?'확인 필요':d.toLocaleString('ko-KR');}
 const NIRC_V1={repoName:'nirc_light_app_center_v1',projectId:'prj_bEnjumDSlVt3j9uMlDCmp1lzm2Mj',teamId:'team_JascJq2O5XRI8RO2mr4NDmSF',productionUrl:'https://nirclightappcenterv1.vercel.app/'};
 function projectUrl(p){const a=[...(p.targets?.production?.alias||[]),...(p.alias||[])].map(x=>typeof x==='string'?x:x?.domain).filter(Boolean);const d=a.find(x=>x==='nirclightappcenterv1.vercel.app')||a.find(x=>x.endsWith('.vercel.app'))||a[0];return d?'https://'+d.replace(/^https?:\/\//,'')+'/':'';}
@@ -473,6 +473,7 @@ function updateReady(){
   $('deployBtn').style.opacity=ok?'1':'0.55';
   $('deployBtn').style.cursor=ok?'pointer':'not-allowed';
 
+  if(busy)return ok;
   if(fileOk&&nameOk&&githubOk&&vercelOk&&safetyOk){
     setProgress(0,'준비 완료');
   }else if(fileOk&&nameOk&&safetyOk){
@@ -528,50 +529,74 @@ async function deployRequestWithTimeout(payload){
   }catch(e){if(e.name==='AbortError')throw new Error('90초 동안 배포 서버 응답이 없습니다. GitHub 저장소와 Vercel 배포 목록을 먼저 확인하세요. 중복 생성 방지를 위해 즉시 재시도하지 마세요.');throw e}
   finally{clearTimeout(timer)}
 }
+// v1.7.7: null-safe new-app target and every transition is visible; confirmation and preparation are protected.
+let deploymentWatchdog=null;
+function deployDiagnostic(message){
+  const el=$('deployDiagnostics');
+  if(!el)return;
+  const t=new Date().toLocaleTimeString('ko-KR');
+  el.textContent=`${t} · ${message}\n`+el.textContent.slice(0,3500);
+}
+function deployStage(percent,message){setProgress(percent,message);deployDiagnostic(message)}
 async function deploy(){
-  let completed=false;
-  let completedText='배포 완료';
-  if($('deployBtn').disabled||busy)return;busy=true;updateReady();$('deployError').classList.add('hidden');$('deployResult').classList.add('hidden');$('launchBtn').classList.add('hidden');$('launchBtn').removeAttribute('href');setProgress(10,'배포 요청 준비 중 · 최대 90초 대기');
-  const chosen=selectedHistoryItem();
-  if($('mode').value==='update'){
-    if(!chosen||!chosen.projectId||!productionUrl(chosen)){busy=false;updateReady();alert('기존 프로젝트 ID를 확인하지 못했습니다. Vercel 목록 새로고침 후 앱을 선택하세요. 새 프로젝트는 만들지 않습니다.');return;}
-    const message=`작업 유형: 기존 앱 업데이트\nZIP: ${selectedZipName}\n앱 이름: ${pref(chosen.repoName).alias||chosen.appName||'이름 미확인'}\nVercel 프로젝트: ${chosen.repoName}\n프로젝트 ID: ${chosen.projectId}\nProduction URL: ${productionUrl(chosen)||'확인 필요'}\n\n이 대상으로 업데이트하시겠습니까?`;
-    if(!confirm(message)){busy=false;updateReady();return;}
-    if(!zipMatchesTarget(selectedZipName,chosen.repoName) && !confirm('ZIP 파일명과 기존 프로젝트명이 다릅니다.\n\nZIP 내부 파일이 이 앱의 올바른 수정본인지 확인하셨습니까?\n기존 앱 파일이 교체될 수 있습니다.\n\n프로젝트 ID와 Production URL 검증은 계속 유지됩니다.')){busy=false;updateReady();return;}
-  }
-  if($('mode').value==='create'&&!confirm('⚠️ 새 앱 생성은 Vercel 프로젝트를 1개 추가합니다.\n이미 존재하는 앱의 수정이라면 취소하고 기존 앱을 선택하세요.\n\n정말 새로운 앱을 생성합니까?')){busy=false;updateReady();return;}
-  const lockedRepoName=$('repoName').readOnly ? $('repoName').value.trim() : '';
-  const payload={appName:$('appName').value.trim(),repoName:$('repoName').value.trim(),visibility:$('visibility').value,mode:$('mode').value,zipName:selectedZipName,expectedAppId:selectedAppId||'',lockedRepoName,expectedProjectId:chosen?.projectId||'',expectedProductionUrl:productionUrl(chosen)||'',vercelTeamId:chosen?.teamId||'',lockSource:resolvedTargetSource||'',clientVersion:APP_VERSION,githubToken:$('githubToken').value.trim(),vercelToken:$('vercelToken').value.trim(),files:packedFiles};
+  if($('deployBtn').disabled||busy)return;
+  let completed=false, completedText='배포 완료';
+  busy=true;
+  const start=Date.now();
+  const diag=$('deployDiagnostics');if(diag)diag.textContent='';
+  $('deployError').classList.add('hidden');$('deployResult').classList.add('hidden');
+  $('launchBtn').classList.add('hidden');$('launchBtn').removeAttribute('href');
+  $('deployBtn').disabled=true;
+  deployStage(10,'① 배포 시작 · 대상 확인');
+  // Watchdog is independent of the fetch timeout, and covers target validation too.
+  deploymentWatchdog=setTimeout(()=>{
+    if(completed||!busy)return;
+    deployDiagnostic('⚠️ 110초 경과: 작업이 응답하지 않습니다. 서버 로그와 저장소를 확인하세요.');
+    $('deployErrorText').textContent='110초 동안 완료 신호가 없습니다. GitHub/Vercel에서 생성 여부를 확인한 후 재시도하세요. 이 화면의 강제 중단은 서버 작업을 취소하지 않습니다.';
+    $('deployError').classList.remove('hidden');
+    setProgress(0,'시간 초과 · 확인 필요');
+  },110000);
   try{
-    setProgress(12,'GitHub/Vercel 서버에 요청 전송 중');
+    const chosen=selectedHistoryItem();
+    deployDiagnostic(`유형: ${$('mode').value==='update'?'기존 앱 업데이트':'신규 앱'} / ZIP: ${selectedZipName} / 파일: ${packedFiles.length}개`);
+    if($('mode').value==='update'){
+      if(!chosen||!chosen.projectId||!productionUrl(chosen))throw new Error('기존 프로젝트 ID 또는 Production URL을 확인하지 못했습니다. 새 프로젝트를 만들지 않습니다.');
+      const message=`작업 유형: 기존 앱 업데이트\nZIP: ${selectedZipName}\n앱 이름: ${pref(chosen.repoName).alias||chosen.appName||'이름 미확인'}\nVercel 프로젝트: ${chosen.repoName}\n프로젝트 ID: ${chosen.projectId}\nProduction URL: ${productionUrl(chosen)}\n\n이 대상으로 업데이트하시겠습니까?`;
+      if(!confirm(message)){deployStage(0,'사용자가 취소함');return;}
+      if(!zipMatchesTarget(selectedZipName,chosen.repoName)&&!confirm('ZIP 파일명과 기존 프로젝트명이 다릅니다.\n기존 앱 파일이 교체될 수 있습니다. 올바른 수정본이 맞습니까?')){deployStage(0,'사용자가 취소함');return;}
+    }else if(!confirm('⚠️ 신규 앱 생성은 Vercel 프로젝트를 추가합니다. 기존 앱 수정이라면 취소하세요. 계속합니까?')){deployStage(0,'사용자가 취소함');return;}
+    deployStage(15,'② 입력 확인 완료 · 전송 데이터 구성');
+    const lockedRepoName=$('repoName').readOnly?$('repoName').value.trim():'';
+    const payload={appName:$('appName').value.trim(),repoName:$('repoName').value.trim(),visibility:$('visibility').value,mode:$('mode').value,zipName:selectedZipName,expectedAppId:selectedAppId||'',lockedRepoName,expectedProjectId:chosen?.projectId||'',expectedProductionUrl:productionUrl(chosen)||'',vercelTeamId:chosen?.teamId||'',lockSource:resolvedTargetSource||'',clientVersion:APP_VERSION,githubToken:$('githubToken').value.trim(),vercelToken:$('vercelToken').value.trim(),files:packedFiles};
+    deployStage(20,'③ /api/deploy 서버 요청 시작 · 최대 90초');
     const d=await deployRequestWithTimeout(payload);
-    setProgress(80,'GitHub 저장 완료 · Vercel 배포 중');let st=null;if(d.vercel.deploymentId)st=await pollVercel(payload.vercelToken,d.vercel.deploymentId);
-    const finalUrl=st?.alias||st?.url||d.vercel.url||'';const state=st?.state||d.vercel.state||'BUILDING';completed=true;completedText=state==='READY'?'배포 완료':'배포 요청 완료';setProgress(100,completedText);
-    $('resultTitle').textContent=state==='READY'?'✅ 배포 완료':'✅ 배포 요청 완료';$('repoLink').href=d.git.repoUrl;$('repoLink').textContent=d.git.repoUrl;$('vercelLink').href=finalUrl;$('vercelLink').textContent=finalUrl;$('vercelState').textContent=state;$('commitSha').textContent=String(d.git.commitSha).slice(0,10);if(finalUrl){$('launchBtn').href=finalUrl;$('launchBtn').classList.remove('hidden')}$('deployResult').classList.remove('hidden');
-    const launch=$('launchBtn');
-    if(launch){
-      launch.href=finalUrl;
-      launch.classList.remove('hidden');
-    }
-    const item={...chosen,projectId:d.vercel.projectId||chosen?.projectId||'',appName:payload.appName,repoName:payload.repoName,repoUrl:d.git.repoUrl,url:finalUrl,appId:d.appId||payload.expectedAppId||'',at:new Date().toISOString()};historyItems=[item,...historyItems.filter(x=>x.repoName!==item.repoName)].slice(0,20);localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));renderHistory();$('historySelect').value=item.repoName;applyHistoryTarget(item);$('mode').value='update';saveTokens();
+    deployStage(80,'④ GitHub 저장 완료 · Vercel 빌드 확인');
+    let st=null;if(d.vercel.deploymentId)st=await pollVercel(payload.vercelToken,d.vercel.deploymentId);
+    const finalUrl=st?.alias||st?.url||d.vercel.url||'';
+    const state=st?.state||d.vercel.state||'BUILDING';
+    completed=true;completedText=state==='READY'?'배포 완료':'배포 요청 완료';deployStage(100,completedText);
+    $('resultTitle').textContent=state==='READY'?'✅ 배포 완료':'✅ 배포 요청 완료';
+    $('repoLink').href=d.git.repoUrl;$('repoLink').textContent=d.git.repoUrl;
+    $('vercelLink').href=finalUrl;$('vercelLink').textContent=finalUrl;
+    $('vercelState').textContent=state;$('commitSha').textContent=String(d.git.commitSha).slice(0,10);
+    if(finalUrl){$('launchBtn').href=finalUrl;$('launchBtn').classList.remove('hidden')}
+    $('deployResult').classList.remove('hidden');
+    const item={...chosen,projectId:d.vercel.projectId||chosen?.projectId||'',appName:payload.appName,repoName:payload.repoName,repoUrl:d.git.repoUrl,url:finalUrl,appId:d.appId||payload.expectedAppId||'',at:new Date().toISOString()};
+    historyItems=[item,...historyItems.filter(x=>x.repoName!==item.repoName)].slice(0,20);
+    localStorage.setItem(HISTORY_KEY,JSON.stringify(historyItems));renderHistory();
+    $('historySelect').value=item.repoName;applyHistoryTarget(item);$('mode').value='update';saveTokens();
   }catch(e){
-    if(completed){
-      console.warn('배포 완료 후 UI 정리 오류:',e);
-    }else{
-      $('deployErrorText').textContent=e.message||'배포 중 오류가 발생했습니다.';
-      $('deployError').classList.remove('hidden');
-      setProgress(0,'오류');
-    }
-  }
-  finally{
+    deployDiagnostic('❌ '+(e?.message||String(e)));
+    if(!completed){$('deployErrorText').textContent=e?.message||'배포 중 오류';$('deployError').classList.remove('hidden');deployStage(0,'오류 · 진단 기록 확인');}
+  }finally{
+    clearTimeout(deploymentWatchdog);deploymentWatchdog=null;
     busy=false;
-    updateReady();
-    // updateReady()는 버튼 활성 상태를 다시 계산하면서 진행률을 20%로 바꿀 수 있다.
-    // 배포가 성공했다면 최종 상태를 다시 100%로 고정한다.
+    try{updateReady()}catch(e){deployDiagnostic('UI 상태 갱신 오류: '+e.message)}
     if(completed)setProgress(100,completedText);
+    else if($('deployError').classList.contains('hidden'))setProgress(0,'대기');
+    deployDiagnostic('종료 · '+Math.round((Date.now()-start)/1000)+'초');
   }
 }
-
 
 
 

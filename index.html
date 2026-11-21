@@ -84,6 +84,7 @@
     <div class="progress"><div id="progressBar"></div></div>
     <div class="status"><b id="stage">준비</b><span class="badge" id="progressText">0%</span></div>
     <button class="btn big spacer" id="deployBtn" disabled>🚀 GitHub 저장 + Vercel 자동 배포</button>
+    <div class="note spacer-sm"><b>배포 진단 기록 (v1.7.7)</b><pre id="deployDiagnostics" style="white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;max-height:220px;overflow:auto">대기 중</pre></div>
     <div class="result error hidden" id="deployError"><h3>배포 실패</h3><div id="deployErrorText"></div></div>
     <div class="result hidden" id="deployResult"><h3 id="resultTitle">✅ 배포 완료</h3><div class="kv"><b>GitHub</b><a class="link" id="repoLink" target="_blank" rel="noreferrer"></a><b>Vercel</b><a class="link" id="vercelLink" target="_blank" rel="noreferrer"></a><b>상태</b><span id="vercelState"></span><b>Commit</b><span class="secret" id="commitSha"></span></div><a class="btn big spacer launch-btn hidden" id="launchBtn" target="_blank" rel="noreferrer">🚀 앱 바로 실행</a></div>
   </section>
@@ -109,7 +110,7 @@
   </section>
 
   <section class="card spacer"><h2>사용 순서</h2><div class="muted"><b>처음 한 번:</b> GitHub 토큰과 Vercel 토큰 입력 → 연결 확인<br><b>새 앱:</b> ChatGPT가 만든 ZIP 선택 → 앱 이름 확인 → 자동 배포<br><b>수정:</b> 기존 앱 선택(주소 잠금) → 수정 ZIP 선택 → 자동 업데이트</div><div class="note">비밀번호 자체는 입력하지 않습니다. GitHub/Vercel에서 발급한 토큰만 사용합니다. 토큰이 유출되었다고 의심되면 해당 서비스에서 즉시 폐기하세요.</div></section>
-  <div class="footer">OneClick App Deployer v1.7.5 SAFE UPDATE + ADDRESS LOCK+ · GitHub + Vercel 자동화 · Supabase 자동 스키마 연결은 다음 단계</div>
+  <div class="footer">OneClick App Deployer v1.7.7 SAFE UPDATE + ADDRESS LOCK+ · GitHub + Vercel 자동화 · Supabase 자동 스키마 연결은 다음 단계</div>
 </main>
 <script type="module" src="/app.js"></script>
 </body>

@@ -14,7 +14,7 @@ function validate(body){
     if(!body.lockedRepoName)throw new Error('안전 차단: 기존 앱 업데이트는 먼저 기존 앱을 선택해 주소를 잠가야 합니다.');
     if(body.lockedRepoName!==body.repoName)throw new Error('안전 차단: 잠긴 기존 주소와 배포 대상이 다릅니다.');
   }
-  if(body.mode==='update' && body.clientVersion!=='1.7.5')throw new Error('안전 차단: 업데이트 클라이언트 버전 불일치');
+  if(body.mode==='update' && body.clientVersion!=='1.7.7')throw new Error('안전 차단: 업데이트 클라이언트 버전 불일치');
   if(body.files.length>220)throw new Error('첫 버전은 파일 220개 이하를 지원합니다.');
   const total=body.files.reduce((s,f)=>s+Number(f.size||0),0);if(total>2.6*1024*1024)throw new Error('첫 버전은 압축 해제 후 약 2.6MB 이하 앱을 지원합니다.');
   for(const f of body.files){if(!f.path||f.path.startsWith('/')||f.path.includes('..')||f.path.includes('\\'))throw new Error(`허용되지 않는 경로: ${f.path}`);if(!/^[A-Za-z0-9+/]*={0,2}$/.test(f.data||''))throw new Error(`잘못된 파일 데이터: ${f.path}`)}

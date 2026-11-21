@@ -1,13 +1,2 @@
-OneClick App Deployer v1.7.5 / 기존 프로젝트 전용 업데이트 안내
-대상 GitHub 저장소: leesunrain/oneclick-app-deployer-safe-v14
-대상 Vercel 프로젝트: oneclick-app-deployer-safe-v14
-기존 Production URL: https://oneclick-app-deployer-safe-v14.vercel.app/
-
-이 ZIP은 배포 완료본이 아니라 수동 업로드용 소스입니다.
-GitHub 기존 저장소의 main 브랜치에서 Add file > Upload files로 ZIP을 압축 해제한 파일들을 기존 파일에 덮어쓰세요.
-ZIP 자체를 업로드하지 마세요. 새 저장소/새 Vercel 프로젝트를 만들지 마세요.
-Vercel에서 기존 프로젝트 Production 배포가 Ready인지 확인한 후 기존 URL을 열어 하단 v1.7.5 표시를 확인하세요.
-PWA 및 사용자 데이터는 삭제하지 마세요.
-
-변경: 서버 요청 크기 사전 점검, HTTP 413/504 오류 메시지, 요청 상태 표시, 90초 응답 제한.
-주의: 10% 정지의 근본 원인은 실제 /api/deploy 요청 로그 및 서버 응답 없이는 확정할 수 없습니다. 이 버전은 오류 식별 개선본입니다.
+v1.7.7 진단 수정본 / 기존 배포기 업데이트 전용\n기존 Vercel projectId: prj_3hlZFbN7i4n6nVQPMPaO5wfF3WDJ\n기존 Production URL: https://oneclick-app-deployer-safe-v14.vercel.app/\nGitHub 기존 저장소: leesunrain/oneclick-app-deployer-safe-v14 (main)\nZIP 압축을 풀어 내부 파일을 기존 GitHub 저장소 main에 업로드하세요. 신규 프로젝트를 만들지 마세요.\n브라우저 localStorage/IndexedDB 삭제 금지. 배포 후 기존 URL에서 v1.7.7 표시 확인.\n진단 기록에서 ①~④ 단계 확인. 배포 정상 동작은 아직 검증되지 않았습니다.\n
+수정: 신규 앱 선택 시 chosen=null에서 productionUrl(chosen) 호출로 발생한 TypeError 해결. 신규 앱은 expectedProductionUrl 빈 값으로 전달. 기존 앱 업데이트의 ID/URL 잠금 유지.
