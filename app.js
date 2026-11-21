@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const MAX_RAW = 2.6 * 1024 * 1024;
 const TOKEN_KEY = 'oneclick-deployer-tokens-v1';
 const HISTORY_KEY = 'oneclick-deployer-history-v1';
-const APP_VERSION = '1.7.3';
+const APP_VERSION = '1.7.4';
 const PREF_KEY='oneclick-v17-app-preferences';
 let appPrefs={};
 try{appPrefs=JSON.parse(localStorage.getItem(PREF_KEY)||'{}')||{}}catch{}
@@ -513,10 +513,22 @@ async function pollVercel(token,id){
   }
   return null;
 }
+async function deployRequestWithTimeout(payload){
+  const controller=new AbortController();
+  const timer=setTimeout(()=>controller.abort(),55000);
+  try{
+    const r=await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});
+    const raw=await r.text();let d;
+    try{d=JSON.parse(raw)}catch{throw new Error('배포 서버가 정상 JSON을 반환하지 않았습니다 (HTTP '+r.status+'). Vercel Functions 로그를 확인하세요.')} 
+    if(!r.ok||!d.ok)throw new Error(d.error||'배포 실패 (HTTP '+r.status+')');
+    return d;
+  }catch(e){if(e.name==='AbortError')throw new Error('55초 동안 배포 서버 응답이 없습니다. GitHub 저장소와 Vercel 배포 목록을 먼저 확인하세요. 중복 생성 방지를 위해 즉시 재시도하지 마세요.');throw e}
+  finally{clearTimeout(timer)}
+}
 async function deploy(){
   let completed=false;
   let completedText='배포 완료';
-  if($('deployBtn').disabled||busy)return;busy=true;updateReady();$('deployError').classList.add('hidden');$('deployResult').classList.add('hidden');$('launchBtn').classList.add('hidden');$('launchBtn').removeAttribute('href');setProgress(10,'GitHub 저장 시작');
+  if($('deployBtn').disabled||busy)return;busy=true;updateReady();$('deployError').classList.add('hidden');$('deployResult').classList.add('hidden');$('launchBtn').classList.add('hidden');$('launchBtn').removeAttribute('href');setProgress(10,'서버 요청 중 · 최대 55초 대기');
   const chosen=selectedHistoryItem();
   if($('mode').value==='update'){
     if(!chosen||!chosen.projectId||!productionUrl(chosen)){busy=false;updateReady();alert('기존 프로젝트 ID를 확인하지 못했습니다. Vercel 목록 새로고침 후 앱을 선택하세요. 새 프로젝트는 만들지 않습니다.');return;}
@@ -528,7 +540,7 @@ async function deploy(){
   const lockedRepoName=$('repoName').readOnly ? $('repoName').value.trim() : '';
   const payload={appName:$('appName').value.trim(),repoName:$('repoName').value.trim(),visibility:$('visibility').value,mode:$('mode').value,zipName:selectedZipName,expectedAppId:selectedAppId||'',lockedRepoName,expectedProjectId:chosen?.projectId||'',expectedProductionUrl:productionUrl(chosen)||'',vercelTeamId:chosen?.teamId||'',lockSource:resolvedTargetSource||'',clientVersion:APP_VERSION,githubToken:$('githubToken').value.trim(),vercelToken:$('vercelToken').value.trim(),files:packedFiles};
   try{
-    const r=await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});const d=await r.json();if(!r.ok||!d.ok)throw new Error(d.error||'배포 실패');
+    const d=await deployRequestWithTimeout(payload);
     setProgress(80,'GitHub 저장 완료 · Vercel 배포 중');let st=null;if(d.vercel.deploymentId)st=await pollVercel(payload.vercelToken,d.vercel.deploymentId);
     const finalUrl=st?.alias||st?.url||d.vercel.url||'';const state=st?.state||d.vercel.state||'BUILDING';completed=true;completedText=state==='READY'?'배포 완료':'배포 요청 완료';setProgress(100,completedText);
     $('resultTitle').textContent=state==='READY'?'✅ 배포 완료':'✅ 배포 요청 완료';$('repoLink').href=d.git.repoUrl;$('repoLink').textContent=d.git.repoUrl;$('vercelLink').href=finalUrl;$('vercelLink').textContent=finalUrl;$('vercelState').textContent=state;$('commitSha').textContent=String(d.git.commitSha).slice(0,10);if(finalUrl){$('launchBtn').href=finalUrl;$('launchBtn').classList.remove('hidden')}$('deployResult').classList.remove('hidden');

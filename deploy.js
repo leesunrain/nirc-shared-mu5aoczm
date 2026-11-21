@@ -14,6 +14,7 @@ function validate(body){
     if(!body.lockedRepoName)throw new Error('안전 차단: 기존 앱 업데이트는 먼저 기존 앱을 선택해 주소를 잠가야 합니다.');
     if(body.lockedRepoName!==body.repoName)throw new Error('안전 차단: 잠긴 기존 주소와 배포 대상이 다릅니다.');
   }
+  if(body.mode==='update' && body.clientVersion!=='1.7.4')throw new Error('안전 차단: 업데이트 클라이언트 버전 불일치');
   if(body.files.length>220)throw new Error('첫 버전은 파일 220개 이하를 지원합니다.');
   const total=body.files.reduce((s,f)=>s+Number(f.size||0),0);if(total>2.6*1024*1024)throw new Error('첫 버전은 압축 해제 후 약 2.6MB 이하 앱을 지원합니다.');
   for(const f of body.files){if(!f.path||f.path.startsWith('/')||f.path.includes('..')||f.path.includes('\\'))throw new Error(`허용되지 않는 경로: ${f.path}`);if(!/^[A-Za-z0-9+/]*={0,2}$/.test(f.data||''))throw new Error(`잘못된 파일 데이터: ${f.path}`)}
@@ -73,7 +74,8 @@ async function syncGithub(body){
   const current=await gh(`${GH_API}/repos/${owner}/${body.repoName}/git/trees/${baseTree}?recursive=1`,token);const existing=new Set();if(current.r.ok&&Array.isArray(current.d.tree))for(const x of current.d.tree)if(x.type==='blob')existing.add(x.path);
   const paths=new Set(body.files.map(f=>f.path));
   const blobs=await mapLimit(body.files,6,async f=>{const br=await gh(`${GH_API}/repos/${owner}/${body.repoName}/git/blobs`,token,{method:'POST',body:JSON.stringify({content:f.data,encoding:'base64'})});if(!br.r.ok)throw new Error(`GitHub 파일 업로드 실패: ${f.path}`);return{path:f.path,mode:'100644',type:'blob',sha:br.d.sha}});
-  const deletes=[...existing].filter(p=>!paths.has(p)).map(path=>({path,mode:'100644',type:'blob',sha:null}));
+  // Existing files not in the ZIP are retained by default. Never silently delete user data or configuration.
+  const deletes=[];
   const tree=await gh(`${GH_API}/repos/${owner}/${body.repoName}/git/trees`,token,{method:'POST',body:JSON.stringify({base_tree:baseTree,tree:[...blobs,...deletes]})});if(!tree.r.ok)throw new Error(`GitHub 트리 생성 실패: ${tree.d.message||tree.r.status}`);
   const nc=await gh(`${GH_API}/repos/${owner}/${body.repoName}/git/commits`,token,{method:'POST',body:JSON.stringify({message:created?(body.mode==='update'?'Adopt existing app with OneClick Deployer':'Initial deploy from OneClick Deployer'):'Update from OneClick Deployer',tree:tree.d.sha,parents:[parent]})});if(!nc.r.ok)throw new Error(`GitHub 커밋 생성 실패: ${nc.d.message||nc.r.status}`);
   const ur=await gh(`${GH_API}/repos/${owner}/${body.repoName}/git/refs/heads/${encodeURIComponent(branch)}`,token,{method:'PATCH',body:JSON.stringify({sha:nc.d.sha,force:false})});if(!ur.r.ok)throw new Error(`GitHub 브랜치 업데이트 실패: ${ur.d.message||ur.r.status}`);
