@@ -2,7 +2,7 @@ const $ = (id) => document.getElementById(id);
 const MAX_RAW = 2.6 * 1024 * 1024;
 const TOKEN_KEY = 'oneclick-deployer-tokens-v1';
 const HISTORY_KEY = 'oneclick-deployer-history-v1';
-const APP_VERSION = '1.7.4';
+const APP_VERSION = '1.7.5';
 const PREF_KEY='oneclick-v17-app-preferences';
 let appPrefs={};
 try{appPrefs=JSON.parse(localStorage.getItem(PREF_KEY)||'{}')||{}}catch{}
@@ -515,20 +515,23 @@ async function pollVercel(token,id){
 }
 async function deployRequestWithTimeout(payload){
   const controller=new AbortController();
-  const timer=setTimeout(()=>controller.abort(),55000);
+  const timer=setTimeout(()=>controller.abort(),90000);
   try{
-    const r=await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload),signal:controller.signal});
+    const encoded=JSON.stringify(payload);
+    const bytes=new Blob([encoded]).size;
+    if(bytes>3.5*1024*1024)throw new Error(`전송 데이터 ${(bytes/1048576).toFixed(2)}MB: 서버 요청 크기 제한 위험. ZIP 내부 파일을 줄여주세요. GitHub/Vercel 변경은 시작하지 않았습니다.`);
+    const r=await fetch('/api/deploy',{method:'POST',headers:{'Content-Type':'application/json'},body:encoded,signal:controller.signal,cache:'no-store'});
     const raw=await r.text();let d;
-    try{d=JSON.parse(raw)}catch{throw new Error('배포 서버가 정상 JSON을 반환하지 않았습니다 (HTTP '+r.status+'). Vercel Functions 로그를 확인하세요.')} 
+    try{d=JSON.parse(raw)}catch{throw new Error('서버 응답 형식 오류 (HTTP '+r.status+'). '+(r.status===413?'요청 데이터가 너무 큽니다.':r.status===504?'서버 처리 시간이 초과됐습니다.':'요청 로그에서 /api/deploy를 확인하세요.')+' 중복 배포 전 GitHub/Vercel 상태를 확인하세요.')} 
     if(!r.ok||!d.ok)throw new Error(d.error||'배포 실패 (HTTP '+r.status+')');
     return d;
-  }catch(e){if(e.name==='AbortError')throw new Error('55초 동안 배포 서버 응답이 없습니다. GitHub 저장소와 Vercel 배포 목록을 먼저 확인하세요. 중복 생성 방지를 위해 즉시 재시도하지 마세요.');throw e}
+  }catch(e){if(e.name==='AbortError')throw new Error('90초 동안 배포 서버 응답이 없습니다. GitHub 저장소와 Vercel 배포 목록을 먼저 확인하세요. 중복 생성 방지를 위해 즉시 재시도하지 마세요.');throw e}
   finally{clearTimeout(timer)}
 }
 async function deploy(){
   let completed=false;
   let completedText='배포 완료';
-  if($('deployBtn').disabled||busy)return;busy=true;updateReady();$('deployError').classList.add('hidden');$('deployResult').classList.add('hidden');$('launchBtn').classList.add('hidden');$('launchBtn').removeAttribute('href');setProgress(10,'서버 요청 중 · 최대 55초 대기');
+  if($('deployBtn').disabled||busy)return;busy=true;updateReady();$('deployError').classList.add('hidden');$('deployResult').classList.add('hidden');$('launchBtn').classList.add('hidden');$('launchBtn').removeAttribute('href');setProgress(10,'배포 요청 준비 중 · 최대 90초 대기');
   const chosen=selectedHistoryItem();
   if($('mode').value==='update'){
     if(!chosen||!chosen.projectId||!productionUrl(chosen)){busy=false;updateReady();alert('기존 프로젝트 ID를 확인하지 못했습니다. Vercel 목록 새로고침 후 앱을 선택하세요. 새 프로젝트는 만들지 않습니다.');return;}
@@ -540,6 +543,7 @@ async function deploy(){
   const lockedRepoName=$('repoName').readOnly ? $('repoName').value.trim() : '';
   const payload={appName:$('appName').value.trim(),repoName:$('repoName').value.trim(),visibility:$('visibility').value,mode:$('mode').value,zipName:selectedZipName,expectedAppId:selectedAppId||'',lockedRepoName,expectedProjectId:chosen?.projectId||'',expectedProductionUrl:productionUrl(chosen)||'',vercelTeamId:chosen?.teamId||'',lockSource:resolvedTargetSource||'',clientVersion:APP_VERSION,githubToken:$('githubToken').value.trim(),vercelToken:$('vercelToken').value.trim(),files:packedFiles};
   try{
+    setProgress(12,'GitHub/Vercel 서버에 요청 전송 중');
     const d=await deployRequestWithTimeout(payload);
     setProgress(80,'GitHub 저장 완료 · Vercel 배포 중');let st=null;if(d.vercel.deploymentId)st=await pollVercel(payload.vercelToken,d.vercel.deploymentId);
     const finalUrl=st?.alias||st?.url||d.vercel.url||'';const state=st?.state||d.vercel.state||'BUILDING';completed=true;completedText=state==='READY'?'배포 완료':'배포 요청 완료';setProgress(100,completedText);
